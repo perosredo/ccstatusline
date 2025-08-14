@@ -1,6 +1,8 @@
 import chalk from 'chalk';
 import { execSync } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { promisify } from 'util';
 import type { StatusItem } from './config';
 
@@ -436,6 +438,142 @@ export async function getBlockRemaining(transcriptPath: string): Promise<string 
     }
 }
 
+// Cache for auto-detected token limit
+let autoDetectedLimit: number | null = null;
+let limitDetectionTime: Date | null = null;
+
+async function detectMaxTokensFromHistory(transcriptPath: string): Promise<number> {
+    try {
+        // Use cached value if recent (within 5 minutes)
+        if (autoDetectedLimit && limitDetectionTime && 
+            (new Date().getTime() - limitDetectionTime.getTime()) < 5 * 60 * 1000) {
+            return autoDetectedLimit;
+        }
+
+        // Try to scan all Claude projects for better detection
+        const homedir = os.homedir();
+        const claudeProjectsDir = path.join(homedir, '.claude', 'projects');
+        const BLOCK_DURATION_MS = 5 * 60 * 60 * 1000;
+        const allBlocks: Map<string, number> = new Map();
+        
+        // First, process the current transcript
+        if (fs.existsSync(transcriptPath)) {
+            const content = await readFile(transcriptPath, 'utf-8');
+            const lines = content.trim().split('\n').filter(line => line.trim());
+            
+            for (const line of lines) {
+                try {
+                    if (!line.includes('"usage"') || !line.includes('"timestamp"')) continue;
+                    
+                    const data = JSON.parse(line);
+                    if (data.message?.usage && data.timestamp) {
+                        const timestamp = new Date(data.timestamp);
+                        const blockStart = new Date(timestamp);
+                        blockStart.setUTCMinutes(0, 0, 0);
+                        
+                        const blockKey = blockStart.toISOString();
+                        const tokens = (data.message.usage.input_tokens || 0) +
+                                      (data.message.usage.output_tokens || 0) +
+                                      (data.message.usage.cache_read_input_tokens || 0) +
+                                      (data.message.usage.cache_creation_input_tokens || 0);
+                        
+                        allBlocks.set(blockKey, (allBlocks.get(blockKey) || 0) + tokens);
+                    }
+                } catch {
+                    // Skip invalid lines
+                }
+            }
+        }
+        
+        // Also scan other recent transcript files for better limit detection
+        if (fs.existsSync(claudeProjectsDir)) {
+            try {
+                const projects = fs.readdirSync(claudeProjectsDir);
+                const now = new Date();
+                const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                
+                for (const project of projects.slice(0, 5)) { // Limit to 5 projects for performance
+                    const projectDir = path.join(claudeProjectsDir, project);
+                    if (fs.statSync(projectDir).isDirectory()) {
+                        const files = fs.readdirSync(projectDir)
+                            .filter(f => f.endsWith('.jsonl'))
+                            .slice(-3); // Last 3 files per project
+                        
+                        for (const file of files) {
+                            const filePath = path.join(projectDir, file);
+                            const stats = fs.statSync(filePath);
+                            
+                            // Skip old files
+                            if (stats.mtime < sevenDaysAgo) continue;
+                            
+                            // Read first and last few lines to get block totals
+                            const content = fs.readFileSync(filePath, 'utf-8');
+                            const lines = content.trim().split('\n').filter(line => line.trim());
+                            
+                            // Sample lines for efficiency (first 100, last 100)
+                            const sampled = [...lines.slice(0, 100), ...lines.slice(-100)];
+                            
+                            for (const line of sampled) {
+                                try {
+                                    if (!line.includes('"usage"') || !line.includes('"timestamp"')) continue;
+                                    
+                                    const data = JSON.parse(line);
+                                    if (data.message?.usage && data.timestamp) {
+                                        const timestamp = new Date(data.timestamp);
+                                        const blockStart = new Date(timestamp);
+                                        blockStart.setUTCMinutes(0, 0, 0);
+                                        
+                                        const blockKey = blockStart.toISOString();
+                                        const tokens = (data.message.usage.input_tokens || 0) +
+                                                      (data.message.usage.output_tokens || 0) +
+                                                      (data.message.usage.cache_read_input_tokens || 0) +
+                                                      (data.message.usage.cache_creation_input_tokens || 0);
+                                        
+                                        allBlocks.set(blockKey, (allBlocks.get(blockKey) || 0) + tokens);
+                                    }
+                                } catch {
+                                    // Skip invalid lines
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch {
+                // If we can't scan other projects, continue with what we have
+            }
+        }
+        
+        // Find max tokens from completed blocks
+        let maxTokens = 0;
+        const now = new Date();
+        
+        for (const [blockKey, tokens] of allBlocks) {
+            const blockStart = new Date(blockKey);
+            const blockEnd = new Date(blockStart.getTime() + BLOCK_DURATION_MS);
+            
+            // Only consider completed blocks
+            if (blockEnd < now && tokens > maxTokens) {
+                maxTokens = tokens;
+            }
+        }
+        
+        // Default to common limits if no history
+        if (maxTokens === 0) {
+            // Pro plan is typically 5M tokens per 5 hours
+            maxTokens = 5_000_000;
+        }
+        
+        // Cache the result
+        autoDetectedLimit = maxTokens;
+        limitDetectionTime = new Date();
+        
+        return maxTokens;
+    } catch {
+        // Default to Pro plan limit
+        return 5_000_000;
+    }
+}
+
 export async function getBlockTokensInfo(transcriptPath: string, tokenLimit?: number): Promise<BlockTokensInfo | null> {
     try {
         if (!transcriptPath || !fs.existsSync(transcriptPath)) {
@@ -508,8 +646,8 @@ export async function getBlockTokensInfo(transcriptPath: string, tokenLimit?: nu
         const projectedAdditionalTokens = burnRatePerMinute * remainingMinutes;
         const projectedTokens = Math.round(currentTokens + projectedAdditionalTokens);
 
-        // Calculate remaining tokens based on limit
-        const effectiveLimit = tokenLimit || 0; // Will be handled by caller if 0
+        // Auto-detect limit if not provided
+        const effectiveLimit = tokenLimit || await detectMaxTokensFromHistory(transcriptPath);
         const remainingTokens = Math.max(0, effectiveLimit - projectedTokens);
 
         return {
