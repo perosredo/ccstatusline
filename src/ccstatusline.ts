@@ -6,6 +6,7 @@ import {
     renderStatusLine,
     getTokenMetrics,
     getSessionDuration,
+    getBlockRemaining,
     type RenderContext
 } from './utils/renderer';
 
@@ -56,6 +57,11 @@ async function renderMultipleLines(data: StatusJSON) {
         line.some(item => item.type === 'session-clock')
     );
 
+    // Check if block remaining is needed
+    const hasBlockRemaining = lines.some(line =>
+        line.some(item => item.type === 'block-remaining')
+    );
+
     let tokenMetrics = null;
     if (hasTokenItems && data.transcript_path) {
         tokenMetrics = await getTokenMetrics(data.transcript_path);
@@ -66,11 +72,17 @@ async function renderMultipleLines(data: StatusJSON) {
         sessionDuration = await getSessionDuration(data.transcript_path);
     }
 
+    let blockRemaining = null;
+    if (hasBlockRemaining && data.transcript_path) {
+        blockRemaining = await getBlockRemaining(data.transcript_path);
+    }
+
     // Create render context
     const context: RenderContext = {
         data,
         tokenMetrics,
         sessionDuration,
+        blockRemaining,
         isPreview: false
     };
 

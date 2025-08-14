@@ -52,6 +52,7 @@ export interface RenderContext {
     data?: StatusJSON;
     tokenMetrics?: TokenMetrics | null;
     sessionDuration?: string | null;
+    blockRemaining?: string | null;
     gitBranch?: string | null;
     gitChanges?: { insertions: number; deletions: number } | null;
     terminalWidth?: number | null;
@@ -92,6 +93,7 @@ export function getItemDefaultColor(type: string): string {
         case 'git-branch': return 'magenta';
         case 'git-changes': return 'yellow';
         case 'session-clock': return 'yellow';
+        case 'block-remaining': return 'green';
         case 'version': return 'green';
         case 'tokens-input': return 'blue';
         case 'tokens-output': return 'white';
@@ -271,6 +273,145 @@ export async function getSessionDuration(transcriptPath: string): Promise<string
             return '<1m';
         }
 
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+
+        if (hours === 0) {
+            return `${minutes}m`;
+        } else if (minutes === 0) {
+            return `${hours}hr`;
+        } else {
+            return `${hours}hr ${minutes}m`;
+        }
+    } catch {
+        return null;
+    }
+}
+
+// Cache for block information
+interface BlockCache {
+    transcriptPath: string;
+    blockStart: Date;
+    blockEnd: Date;
+    lastChecked: Date;
+}
+
+let blockCache: BlockCache | null = null;
+
+export async function getBlockRemaining(transcriptPath: string): Promise<string | null> {
+    try {
+        if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+            return null;
+        }
+
+        const now = new Date();
+        
+        // Check if we have a valid cache (less than 30 seconds old and same file)
+        if (blockCache && 
+            blockCache.transcriptPath === transcriptPath &&
+            (now.getTime() - blockCache.lastChecked.getTime()) < 30000) {
+            
+            // Use cached block information
+            const remainingMs = blockCache.blockEnd.getTime() - now.getTime();
+            
+            if (remainingMs <= 0) {
+                // Block expired, clear cache
+                blockCache = null;
+                return null;
+            }
+            
+            const totalMinutes = Math.floor(remainingMs / (1000 * 60));
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+            
+            if (hours === 0) {
+                return `${minutes}m`;
+            } else if (minutes === 0) {
+                return `${hours}hr`;
+            } else {
+                return `${hours}hr ${minutes}m`;
+            }
+        }
+
+        // Need to parse file to find block information
+        const content = await readFile(transcriptPath, 'utf-8');
+        const lines = content.trim().split('\n').filter(line => line.trim());
+
+        if (lines.length === 0) {
+            return null;
+        }
+
+        let firstTimestamp: Date | null = null;
+        let lastTimestamp: Date | null = null;
+
+        // Parse only the timestamp field from the beginning of each line
+        for (const line of lines) {
+            // Quick check if line likely has a timestamp
+            if (!line.includes('"timestamp"')) continue;
+            
+            try {
+                // Extract just the timestamp using a regex for efficiency
+                const timestampMatch = line.match(/"timestamp"\s*:\s*"([^"]+)"/);
+                if (timestampMatch && timestampMatch[1]) {
+                    const timestamp = new Date(timestampMatch[1]);
+                    if (!firstTimestamp) {
+                        firstTimestamp = timestamp;
+                    }
+                    lastTimestamp = timestamp;
+                }
+            } catch {
+                // Skip invalid timestamps
+            }
+        }
+
+        if (!firstTimestamp || !lastTimestamp) {
+            return null;
+        }
+
+        // Determine which block we're in based on the last timestamp
+        const BLOCK_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
+        
+        // Find the start of the current block
+        // We need to check if we're still in an active block
+        let blockStart: Date;
+        
+        // Check if the last activity was recent (within 5 hours)
+        if (now.getTime() - lastTimestamp.getTime() > BLOCK_DURATION_MS) {
+            // No active block
+            return null;
+        }
+        
+        // Work backwards from last timestamp to find current block start
+        blockStart = new Date(lastTimestamp);
+        blockStart.setUTCMinutes(0, 0, 0); // Floor to hour
+        
+        // If the last activity was more than 5 hours after this floored time,
+        // we need to find the right block
+        while (lastTimestamp.getTime() - blockStart.getTime() > BLOCK_DURATION_MS) {
+            blockStart = new Date(blockStart.getTime() + BLOCK_DURATION_MS);
+        }
+        
+        const blockEnd = new Date(blockStart.getTime() + BLOCK_DURATION_MS);
+        
+        // Cache the block information
+        blockCache = {
+            transcriptPath,
+            blockStart,
+            blockEnd,
+            lastChecked: now
+        };
+        
+        // Calculate remaining time
+        const remainingMs = blockEnd.getTime() - now.getTime();
+
+        // If block has expired, clear cache and return null
+        if (remainingMs <= 0) {
+            blockCache = null;
+            return null;
+        }
+
+        // Convert to hours and minutes
+        const totalMinutes = Math.floor(remainingMs / (1000 * 60));
         const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
 
@@ -543,6 +684,16 @@ export function renderStatusLine(
                 } else if (context.sessionDuration) {
                     const text = item.rawValue ? context.sessionDuration : `Session: ${context.sessionDuration}`;
                     elements.push({ content: applyColorsWithOverride(text, item.color || 'yellow', item.backgroundColor, item.bold), type: 'session-clock', item });
+                }
+                break;
+
+            case 'block-remaining':
+                if (context.isPreview) {
+                    const blockText = item.rawValue ? '3hr 35m' : 'Block: 3hr 35m';
+                    elements.push({ content: applyColorsWithOverride(blockText, item.color || 'green', item.backgroundColor, item.bold), type: 'block-remaining', item });
+                } else if (context.blockRemaining) {
+                    const text = item.rawValue ? context.blockRemaining : `Block: ${context.blockRemaining}`;
+                    elements.push({ content: applyColorsWithOverride(text, item.color || 'green', item.backgroundColor, item.bold), type: 'block-remaining', item });
                 }
                 break;
 
