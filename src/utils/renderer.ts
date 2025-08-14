@@ -48,11 +48,19 @@ export interface TokenMetrics {
     contextLength: number;
 }
 
+export interface BlockTokensInfo {
+    currentTokens: number;
+    burnRatePerMinute: number;
+    remainingTokens: number;
+    projectedTokens: number;
+}
+
 export interface RenderContext {
     data?: StatusJSON;
     tokenMetrics?: TokenMetrics | null;
     sessionDuration?: string | null;
     blockRemaining?: string | null;
+    blockTokensInfo?: BlockTokensInfo | null;
     gitBranch?: string | null;
     gitChanges?: { insertions: number; deletions: number } | null;
     terminalWidth?: number | null;
@@ -94,6 +102,7 @@ export function getItemDefaultColor(type: string): string {
         case 'git-changes': return 'yellow';
         case 'session-clock': return 'yellow';
         case 'block-remaining': return 'green';
+        case 'block-tokens-remaining': return 'yellow';
         case 'version': return 'green';
         case 'tokens-input': return 'blue';
         case 'tokens-output': return 'white';
@@ -427,6 +436,93 @@ export async function getBlockRemaining(transcriptPath: string): Promise<string 
     }
 }
 
+export async function getBlockTokensInfo(transcriptPath: string, tokenLimit?: number): Promise<BlockTokensInfo | null> {
+    try {
+        if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+            return null;
+        }
+
+        const content = await readFile(transcriptPath, 'utf-8');
+        const lines = content.trim().split('\n').filter(line => line.trim());
+
+        if (lines.length === 0) {
+            return null;
+        }
+
+        // Calculate current block tokens
+        let currentInputTokens = 0;
+        let currentOutputTokens = 0;
+        let currentCacheTokens = 0;
+        let firstTimestamp: Date | null = null;
+        let lastTimestamp: Date | null = null;
+
+        for (const line of lines) {
+            try {
+                // Quick check if line has usage data
+                if (!line.includes('"usage"')) continue;
+                
+                const data = JSON.parse(line);
+                if (data.message?.usage) {
+                    currentInputTokens += data.message.usage.input_tokens || 0;
+                    currentOutputTokens += data.message.usage.output_tokens || 0;
+                    currentCacheTokens += (data.message.usage.cache_read_input_tokens || 0) + 
+                                        (data.message.usage.cache_creation_input_tokens || 0);
+                }
+                
+                if (data.timestamp) {
+                    const timestamp = new Date(data.timestamp);
+                    if (!firstTimestamp) firstTimestamp = timestamp;
+                    lastTimestamp = timestamp;
+                }
+            } catch {
+                // Skip invalid lines
+            }
+        }
+
+        const currentTokens = currentInputTokens + currentOutputTokens + currentCacheTokens;
+
+        if (!firstTimestamp || !lastTimestamp) {
+            return null;
+        }
+
+        // Calculate burn rate
+        const durationMinutes = (lastTimestamp.getTime() - firstTimestamp.getTime()) / (1000 * 60);
+        const burnRatePerMinute = durationMinutes > 0 ? currentTokens / durationMinutes : 0;
+
+        // Get remaining time in block
+        const now = new Date();
+        const BLOCK_DURATION_MS = 5 * 60 * 60 * 1000;
+        
+        // Find block start (floored to hour)
+        let blockStart = new Date(lastTimestamp);
+        blockStart.setUTCMinutes(0, 0, 0);
+        
+        while (lastTimestamp.getTime() - blockStart.getTime() > BLOCK_DURATION_MS) {
+            blockStart = new Date(blockStart.getTime() + BLOCK_DURATION_MS);
+        }
+        
+        const blockEnd = new Date(blockStart.getTime() + BLOCK_DURATION_MS);
+        const remainingMinutes = Math.max(0, (blockEnd.getTime() - now.getTime()) / (1000 * 60));
+
+        // Calculate projected tokens
+        const projectedAdditionalTokens = burnRatePerMinute * remainingMinutes;
+        const projectedTokens = Math.round(currentTokens + projectedAdditionalTokens);
+
+        // Calculate remaining tokens based on limit
+        const effectiveLimit = tokenLimit || 0; // Will be handled by caller if 0
+        const remainingTokens = Math.max(0, effectiveLimit - projectedTokens);
+
+        return {
+            currentTokens,
+            burnRatePerMinute: Math.round(burnRatePerMinute),
+            remainingTokens,
+            projectedTokens
+        };
+    } catch {
+        return null;
+    }
+}
+
 export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetrics> {
     try {
         // Use Node.js-compatible file reading
@@ -694,6 +790,18 @@ export function renderStatusLine(
                 } else if (context.blockRemaining) {
                     const text = item.rawValue ? context.blockRemaining : `Block: ${context.blockRemaining}`;
                     elements.push({ content: applyColorsWithOverride(text, item.color || 'green', item.backgroundColor, item.bold), type: 'block-remaining', item });
+                }
+                break;
+
+            case 'block-tokens-remaining':
+                if (context.isPreview) {
+                    const tokensText = item.rawValue ? '250k' : 'Tokens Left: 250k';
+                    elements.push({ content: applyColorsWithOverride(tokensText, item.color || 'yellow', item.backgroundColor, item.bold), type: 'block-tokens-remaining', item });
+                } else if (context.blockTokensInfo) {
+                    const { remainingTokens } = context.blockTokensInfo;
+                    const formattedTokens = formatTokens(remainingTokens);
+                    const text = item.rawValue ? formattedTokens : `Tokens Left: ${formattedTokens}`;
+                    elements.push({ content: applyColorsWithOverride(text, item.color || 'yellow', item.backgroundColor, item.bold), type: 'block-tokens-remaining', item });
                 }
                 break;
 

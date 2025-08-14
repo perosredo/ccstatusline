@@ -427,7 +427,7 @@ const ItemsEditor: React.FC<ItemsEditorProps> = ({ items, onUpdate, onBack, line
                 // Toggle item type backwards
                 const types: StatusItemType[] = ['model', 'git-branch', 'git-changes', 'separator',
                     'tokens-input', 'tokens-output', 'tokens-cached', 'tokens-total', 'context-length', 'context-percentage', 'context-percentage-usable',
-                    'session-clock', 'block-remaining', 'terminal-width', 'version', 'flex-separator', 'custom-text', 'custom-command'];
+                    'session-clock', 'block-remaining', 'block-tokens-remaining', 'terminal-width', 'version', 'flex-separator', 'custom-text', 'custom-command'];
                 const currentItem = items[selectedIndex];
                 if (currentItem) {
                     const currentType = currentItem.type;
@@ -444,7 +444,7 @@ const ItemsEditor: React.FC<ItemsEditorProps> = ({ items, onUpdate, onBack, line
                 // Toggle item type forwards
                 const types: StatusItemType[] = ['model', 'git-branch', 'git-changes', 'separator',
                     'tokens-input', 'tokens-output', 'tokens-cached', 'tokens-total', 'context-length', 'context-percentage', 'context-percentage-usable',
-                    'session-clock', 'block-remaining', 'terminal-width', 'version', 'flex-separator', 'custom-text', 'custom-command'];
+                    'session-clock', 'block-remaining', 'block-tokens-remaining', 'terminal-width', 'version', 'flex-separator', 'custom-text', 'custom-command'];
                 const currentItem = items[selectedIndex];
                 if (currentItem) {
                     const currentType = currentItem.type;
@@ -592,6 +592,8 @@ const ItemsEditor: React.FC<ItemsEditorProps> = ({ items, onUpdate, onBack, line
                 return colorFunc('Session Clock');
             case 'block-remaining':
                 return colorFunc('Block Remaining');
+            case 'block-tokens-remaining':
+                return colorFunc('Block Tokens Left');
             case 'terminal-width':
                 return colorFunc('Terminal Width');
             case 'version':
@@ -715,7 +717,7 @@ const ColorMenu: React.FC<ColorMenuProps> = ({ items, onUpdate, onBack }) => {
         if (item.type === 'separator') {
             return showSeparators;
         }
-        return ['model', 'git-branch', 'git-changes', 'tokens-input', 'tokens-output', 'tokens-cached', 'tokens-total', 'context-length', 'context-percentage', 'context-percentage-usable', 'session-clock', 'block-remaining', 'terminal-width', 'version', 'custom-text', 'custom-command'].includes(item.type) &&
+        return ['model', 'git-branch', 'git-changes', 'tokens-input', 'tokens-output', 'tokens-cached', 'tokens-total', 'context-length', 'context-percentage', 'context-percentage-usable', 'session-clock', 'block-remaining', 'block-tokens-remaining', 'terminal-width', 'version', 'custom-text', 'custom-command'].includes(item.type) &&
             !(item.type === 'custom-command' && item.preserveColors); // Exclude custom-command items with preserveColors
     });
     const [highlightedItemId, setHighlightedItemId] = useState<string | null>(colorableItems[0]?.id || null);
@@ -746,7 +748,7 @@ const ColorMenu: React.FC<ColorMenuProps> = ({ items, onUpdate, onBack }) => {
                 if (item.type === 'separator') {
                     return !showSeparators; // Will be toggled
                 }
-                return ['model', 'git-branch', 'git-changes', 'tokens-input', 'tokens-output', 'tokens-cached', 'tokens-total', 'context-length', 'context-percentage', 'context-percentage-usable', 'session-clock', 'block-remaining', 'terminal-width', 'version', 'custom-text', 'custom-command'].includes(item.type) &&
+                return ['model', 'git-branch', 'git-changes', 'tokens-input', 'tokens-output', 'tokens-cached', 'tokens-total', 'context-length', 'context-percentage', 'context-percentage-usable', 'session-clock', 'block-remaining', 'block-tokens-remaining', 'terminal-width', 'version', 'custom-text', 'custom-command'].includes(item.type) &&
                     !(item.type === 'custom-command' && item.preserveColors);
             });
             if (newColorableItems.length > 0) {
@@ -814,6 +816,7 @@ const ColorMenu: React.FC<ColorMenuProps> = ({ items, onUpdate, onBack }) => {
             case 'context-percentage-usable': return 'Context % (usable)';
             case 'session-clock': return 'Session Clock';
             case 'block-remaining': return 'Block Remaining';
+            case 'block-tokens-remaining': return 'Block Tokens Left';
             case 'terminal-width': return 'Terminal Width';
             case 'version': return 'Version';
             case 'separator': return `Separator (${item.character || '|'})`;

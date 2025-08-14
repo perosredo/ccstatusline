@@ -9,7 +9,7 @@ const writeFile = fs.promises?.writeFile || promisify(fs.writeFile);
 const mkdir = fs.promises?.mkdir || promisify(fs.mkdir);
 
 export type StatusItemType = 'model' | 'git-branch' | 'git-changes' | 'separator' | 'flex-separator' |
-    'tokens-input' | 'tokens-output' | 'tokens-cached' | 'tokens-total' | 'context-length' | 'context-percentage' | 'context-percentage-usable' | 'terminal-width' | 'session-clock' | 'block-remaining' | 'version' | 'custom-text' | 'custom-command';
+    'tokens-input' | 'tokens-output' | 'tokens-cached' | 'tokens-total' | 'context-length' | 'context-percentage' | 'context-percentage-usable' | 'terminal-width' | 'session-clock' | 'block-remaining' | 'block-tokens-remaining' | 'version' | 'custom-text' | 'custom-command';
 
 export interface StatusItem {
     id: string;
@@ -24,6 +24,7 @@ export interface StatusItem {
     maxWidth?: number; // For custom-command type - max width of output
     preserveColors?: boolean; // For custom-command type - preserve ANSI colors from command output
     timeout?: number; // For custom-command type - timeout in milliseconds (default: 1000)
+    tokenLimit?: number; // For block-tokens-remaining - max tokens per block (default: use max from previous blocks)
 }
 
 export type FlexMode = 'full' | 'full-minus-40' | 'full-until-compact';

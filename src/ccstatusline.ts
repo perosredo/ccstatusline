@@ -7,6 +7,7 @@ import {
     getTokenMetrics,
     getSessionDuration,
     getBlockRemaining,
+    getBlockTokensInfo,
     type RenderContext
 } from './utils/renderer';
 
@@ -62,6 +63,10 @@ async function renderMultipleLines(data: StatusJSON) {
         line.some(item => item.type === 'block-remaining')
     );
 
+    // Check if block tokens remaining is needed
+    const blockTokensItem = lines.flat().find(item => item.type === 'block-tokens-remaining');
+    const hasBlockTokensRemaining = blockTokensItem !== undefined;
+
     let tokenMetrics = null;
     if (hasTokenItems && data.transcript_path) {
         tokenMetrics = await getTokenMetrics(data.transcript_path);
@@ -77,12 +82,20 @@ async function renderMultipleLines(data: StatusJSON) {
         blockRemaining = await getBlockRemaining(data.transcript_path);
     }
 
+    let blockTokensInfo = null;
+    if (hasBlockTokensRemaining && data.transcript_path) {
+        // Get token limit from item config, default to undefined (will auto-detect max)
+        const tokenLimit = blockTokensItem?.tokenLimit;
+        blockTokensInfo = await getBlockTokensInfo(data.transcript_path, tokenLimit);
+    }
+
     // Create render context
     const context: RenderContext = {
         data,
         tokenMetrics,
         sessionDuration,
         blockRemaining,
+        blockTokensInfo,
         isPreview: false
     };
 
